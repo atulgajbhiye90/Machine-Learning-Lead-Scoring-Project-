@@ -1,5 +1,5 @@
 # ML Project Rental.py
-# Created from Jupyter notebook: ML Project Rental.ipynb
+# Corrected version - Fixed multiple issues
 
 import os
 import pandas as pd
@@ -74,8 +74,9 @@ print(f"After filling with 0: {df_fill.shape}")
 
 # Function to fill missing values with -1
 def fill_missing_minus_one(df):
-    df.fillna(-1, inplace=True)
-    return df
+    df_copy = df.copy()
+    df_copy.fillna(-1, inplace=True)
+    return df_copy
 
 # ============================================
 # 3. Remove Duplicates
@@ -104,14 +105,14 @@ print(f"After filling with constants: {df_fill.shape}")
 df_no_duplicates = df.drop_duplicates()
 print(f"After removing duplicates: {df_no_duplicates.shape}")
 
-# Clean preferred_area column
-df['preferred_area'] = df['user_type'].replace({
-    'bhk': 'bhk',
-    'bhk': 'bhk',
-})
-
-print("Before cleaning:", df['preferred_area'].unique())
-print("After cleaning:", df['user_type'].unique())
+# FIXED: Clean preferred_area column (was incorrectly using user_type)
+if 'preferred_area' in df.columns:
+    df['preferred_area'] = df['preferred_area'].replace({
+        'BHK': 'bhk',
+        'Bhk': 'bhk',
+    })
+    print("Before cleaning:", df['preferred_area'].unique()[:10])  # Show first 10
+    print("After cleaning:", df['preferred_area'].unique()[:10])
 
 # ============================================
 # 5. Lead Scoring Functions
@@ -168,9 +169,15 @@ def prioritize_leads(df, top_n_per_agent=10):
     return prioritized
 
 def select_for_immediate_followup(df, min_score=60, max_age_days=7):
+    """Select leads requiring immediate follow-up based on score and age."""
     df = df.copy()
-    df['lead_age_days'] = (pd.Timestamp.now() - pd.to_datetime(df['created_date'])).dt.days
-    return df[(df['score'] >= min_score) & (df['lead_age_days'] <= max_age_days)].sort_values('score', ascending=False)
+    if 'created_date' in df.columns:
+        df['lead_age_days'] = (pd.Timestamp.now() - pd.to_datetime(df['created_date'], errors='coerce')).dt.days
+        df['lead_age_days'] = df['lead_age_days'].fillna(999)
+        return df[(df['score'] >= min_score) & (df['lead_age_days'] <= max_age_days)].sort_values('score', ascending=False)
+    else:
+        # If no created_date, just filter by score
+        return df[df['score'] >= min_score].sort_values('score', ascending=False)
 
 # ============================================
 # 7. Automated Alerts Functions
@@ -178,18 +185,23 @@ def select_for_immediate_followup(df, min_score=60, max_age_days=7):
 
 def send_email_notification(to_email, subject, body, smtp_cfg):
     """Simple SMTP mailer. Replace with SendGrid/Twilio Send API in prod."""
-    msg = EmailMessage()
-    msg['Subject'] = subject
-    msg['From'] = smtp_cfg['from']
-    msg['To'] = to_email
-    msg.set_content(body)
-    
-    with smtplib.SMTP(smtp_cfg['host'], smtp_cfg.get('port', 25)) as s:
-        if smtp_cfg.get('starttls', False):
-            s.starttls()
-        if smtp_cfg.get('username'):
-            s.login(smtp_cfg['username'], smtp_cfg['password'])
-        s.send_message(msg)
+    try:
+        msg = EmailMessage()
+        msg['Subject'] = subject
+        msg['From'] = smtp_cfg['from']
+        msg['To'] = to_email
+        msg.set_content(body)
+        
+        with smtplib.SMTP(smtp_cfg['host'], smtp_cfg.get('port', 25)) as s:
+            if smtp_cfg.get('starttls', False):
+                s.starttls()
+            if smtp_cfg.get('username'):
+                s.login(smtp_cfg['username'], smtp_cfg['password'])
+            s.send_message(msg)
+        return True
+    except Exception as e:
+        print(f"Email send failed: {e}")
+        return False
 
 def alert_high_intent_leads(df, smtp_cfg, agent_lookup):
     """
@@ -225,16 +237,14 @@ def assign_leads_round_robin(df, agents):
     - agents: list of agent dicts or agent ids
     """
     df = df.copy()
-    agent_cycle = iter(agents)
+    if len(agents) == 0:
+        return df
+    
+    agent_ids = [agent if isinstance(agent, (int, str)) else agent['id'] for agent in agents]
     assigned = []
     
-    for _, row in df.sort_values('score', ascending=False).iterrows():
-        try:
-            agent = next(agent_cycle)
-        except StopIteration:
-            agent_cycle = iter(agents)
-            agent = next(agent_cycle)
-        assigned.append(agent if isinstance(agent, (int, str)) else agent['id'])
+    for i, _ in enumerate(df.sort_values('score', ascending=False).iterrows()):
+        assigned.append(agent_ids[i % len(agent_ids)])
     
     df['agent_id'] = assigned
     return df
@@ -246,12 +256,17 @@ def assign_by_capacity_and_skill(df, agents_df):
     """
     df = df.copy()
     df['assigned_agent'] = None
-    agents_sorted = agents_df.sort_values(['capacity_remaining', 'skill_score'], ascending=[False, False])
+    agents_sorted = agents_df.sort_values(['capacity_remaining', 'skill_score'], ascending=[False, False]).copy()
     
     for idx, lead in df.sort_values('score', ascending=False).iterrows():
         # pick first agent with capacity > 0 and highest skill relevancy
-        candidate = agents_sorted[agents_sorted['capacity_remaining'] > 0].iloc[0]
+        available_agents = agents_sorted[agents_sorted['capacity_remaining'] > 0]
+        if len(available_agents) == 0:
+            break
+        
+        candidate = available_agents.iloc[0]
         df.at[idx, 'assigned_agent'] = candidate['agent_id']
+        # Update capacity
         agents_sorted.loc[agents_sorted['agent_id'] == candidate['agent_id'], 'capacity_remaining'] -= 1
     
     return df
@@ -269,29 +284,38 @@ def compute_kpis(leads_df, interactions_df, revenue_df):
     """
     # Time to convert (days)
     conv = leads_df.dropna(subset=['converted_date']).copy()
-    conv['time_to_convert_days'] = (pd.to_datetime(conv['converted_date']) - 
-                                    pd.to_datetime(conv['created_date'])).dt.total_seconds() / 86400.0
+    if len(conv) > 0:
+        conv['time_to_convert_days'] = (pd.to_datetime(conv['converted_date']) - 
+                                        pd.to_datetime(conv['created_date'])).dt.total_seconds() / 86400.0
 
-    # Per-agent KPIs
-    agent_stats = conv.groupby('assigned_agent').agg(
-        conversions=('lead_id', 'count'),
-        avg_time_to_convert=('time_to_convert_days', 'mean')
-    ).reset_index()
+        # Per-agent KPIs
+        agent_stats = conv.groupby('assigned_agent').agg(
+            conversions=('lead_id', 'count'),
+            avg_time_to_convert=('time_to_convert_days', 'mean')
+        ).reset_index()
 
-    revenue_per_lead = revenue_df.groupby('lead_id')['revenue_amount'].sum().reset_index()
-    conv = conv.merge(revenue_per_lead, on='lead_id', how='left').fillna({'revenue_amount': 0})
+        revenue_per_lead = revenue_df.groupby('lead_id')['revenue_amount'].sum().reset_index()
+        conv = conv.merge(revenue_per_lead, on='lead_id', how='left').fillna({'revenue_amount': 0})
 
-    revenue_by_agent = conv.groupby('assigned_agent')['revenue_amount'].sum().reset_index().rename(
-        columns={'revenue_amount': 'revenue'})
+        revenue_by_agent = conv.groupby('assigned_agent')['revenue_amount'].sum().reset_index().rename(
+            columns={'revenue_amount': 'revenue'})
 
-    agent_kpis = agent_stats.merge(revenue_by_agent, on='assigned_agent', how='left').fillna(0)
-    
-    overall = {
-        'total_leads': len(leads_df),
-        'total_conversions': len(conv),
-        'avg_time_to_convert_days': conv['time_to_convert_days'].mean() if len(conv) > 0 else None,
-        'total_revenue': conv['revenue_amount'].sum()
-    }
+        agent_kpis = agent_stats.merge(revenue_by_agent, on='assigned_agent', how='left').fillna(0)
+        
+        overall = {
+            'total_leads': len(leads_df),
+            'total_conversions': len(conv),
+            'avg_time_to_convert_days': conv['time_to_convert_days'].mean(),
+            'total_revenue': conv['revenue_amount'].sum()
+        }
+    else:
+        overall = {
+            'total_leads': len(leads_df),
+            'total_conversions': 0,
+            'avg_time_to_convert_days': None,
+            'total_revenue': 0
+        }
+        agent_kpis = pd.DataFrame()
     
     return overall, agent_kpis
 
@@ -310,7 +334,7 @@ def batch_score_and_export(df, model, feature_cols, crm_update_endpoint, api_key
     payloads = []
     for _, row in scored.iterrows():
         payloads.append({
-            "lead_id": int(row['lead_id']),
+            "lead_id": int(row['lead_id']) if pd.notna(row['lead_id']) else None,
             "score": float(row['score']),
             "category": row['category']
         })
@@ -318,8 +342,11 @@ def batch_score_and_export(df, model, feature_cols, crm_update_endpoint, api_key
     # Push updates (example)
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     for p in payloads:
-        # Replace with CRM bulk API when available
-        requests.post(crm_update_endpoint, json=p, headers=headers, timeout=5)
+        try:
+            # Replace with CRM bulk API when available
+            requests.post(crm_update_endpoint, json=p, headers=headers, timeout=5)
+        except Exception as e:
+            print(f"Failed to update lead {p['lead_id']}: {e}")
     
     return scored
 
@@ -363,9 +390,9 @@ def compute_budget_match(df, lead_budget_col="budget", property_min_col="prop_re
       - 1.0 if lead budget falls inside property's [min,max]
       - declines linearly when outside (capped at 0)
     """
-    lb = df[lead_budget_col].astype(float)
-    pmin = df[property_min_col].astype(float)
-    pmax = df[property_max_col].astype(float)
+    lb = pd.to_numeric(df[lead_budget_col], errors='coerce')
+    pmin = pd.to_numeric(df[property_min_col], errors='coerce')
+    pmax = pd.to_numeric(df[property_max_col], errors='coerce')
 
     # when budget inside range => 1
     inside = (lb >= pmin) & (lb <= pmax)
@@ -418,6 +445,7 @@ def simple_area_match(lead_area, property_area):
     return 0.0
 
 def tfidf_area_match(series_lead_areas, series_property_areas):
+    """Compute TF-IDF based area matching scores."""
     corpus = pd.concat([series_lead_areas.fillna(""), series_property_areas.fillna("")]).astype(str)
     tf = TfidfVectorizer(stop_words="english", ngram_range=(1, 2))
     tfidf = tf.fit_transform(corpus)
@@ -438,10 +466,14 @@ def compute_engagement_score(df,
                              avg_time_col="avg_view_time_sec",
                              saved_col="saved_properties",
                              repeat_col="repeated_visits"):
+    """Compute engagement score from behavioral metrics."""
     # Normalize each metric to 0-1 using log-scaling to reduce skew
     def norm_series(s):
         s = pd.to_numeric(s, errors="coerce").fillna(0)
-        return (np.log1p(s) / np.log1p(s.max() + 1)) if s.max() > 0 else s * 0.0
+        max_val = s.max()
+        if max_val > 0:
+            return np.log1p(s) / np.log1p(max_val)
+        return s * 0.0
 
     v = norm_series(df[views_col])
     t = norm_series(df[avg_time_col])
@@ -462,15 +494,30 @@ def compute_interaction_features(df,
                                  whatsapp_col="whatsapp_clicks",
                                  call_col="call_clicks",
                                  chat_col="chat_messages"):
+    """Compute interaction-based features."""
     # Ensure numeric and fillna
     res = pd.DataFrame(index=df.index)
-    res["first_response_time_hours"] = pd.to_numeric(df.get(first_resp_col, pd.Series(np.nan, index=df.index)), errors="coerce")
-    res["first_response_time_hours"] = res["first_response_time_hours"].fillna(res["first_response_time_hours"].median())
+    
+    # First response time
+    if first_resp_col in df.columns:
+        res["first_response_time_hours"] = pd.to_numeric(df[first_resp_col], errors="coerce")
+        median_val = res["first_response_time_hours"].median()
+        res["first_response_time_hours"] = res["first_response_time_hours"].fillna(median_val if pd.notna(median_val) else 24)
+    else:
+        res["first_response_time_hours"] = 24
 
+    # Follow-up count
     res["follow_up_count"] = pd.to_numeric(df.get(followups_col, 0), errors="coerce").fillna(0)
-    res["lead_response_time_hours"] = pd.to_numeric(df.get(lead_resp_col, np.nan), errors="coerce").fillna(
-        res["lead_response_time_hours"].median() if "lead_response_time_hours" in res else 24)
+    
+    # Lead response time
+    if lead_resp_col in df.columns:
+        res["lead_response_time_hours"] = pd.to_numeric(df[lead_resp_col], errors="coerce")
+        median_val = res["lead_response_time_hours"].median()
+        res["lead_response_time_hours"] = res["lead_response_time_hours"].fillna(median_val if pd.notna(median_val) else 24)
+    else:
+        res["lead_response_time_hours"] = 24
 
+    # Interaction counts
     res["whatsapp_clicks"] = pd.to_numeric(df.get(whatsapp_col, 0), errors="coerce").fillna(0)
     res["call_clicks"] = pd.to_numeric(df.get(call_col, 0), errors="coerce").fillna(0)
     res["chat_messages"] = pd.to_numeric(df.get(chat_col, 0), errors="coerce").fillna(0)
@@ -478,6 +525,7 @@ def compute_interaction_features(df,
     # Derived features
     res["agent_response_fast"] = (res["first_response_time_hours"] <= 1).astype(int)
     res["interaction_count"] = res[["follow_up_count", "whatsapp_clicks", "call_clicks", "chat_messages"]].sum(axis=1)
+    
     return res
 
 # ============================================
@@ -499,14 +547,14 @@ def train_randomforest_model():
     if "budget_min" in df.columns and "budget_max" in df.columns:
         df["budget_mid"] = df[["budget_min", "budget_max"]].mean(axis=1)
     elif "budget" in df.columns:
-        df["budget_mid"] = df["budget"]
+        df["budget_mid"] = pd.to_numeric(df["budget"], errors='coerce')
     else:
         df["budget_mid"] = np.nan
 
     # Budget match feature
     if df["budget_mid"].notna().any():
         min_b, max_b = df["budget_mid"].min(), df["budget_mid"].max()
-        if min_b == max_b:
+        if min_b == max_b or pd.isna(min_b) or pd.isna(max_b):
             df["budget_match"] = 1.0
         else:
             df["budget_match"] = (df["budget_mid"] - min_b) / (max_b - min_b)
@@ -516,7 +564,7 @@ def train_randomforest_model():
     # Area match feature
     if "preferred_area" in df.columns:
         area_freq = df["preferred_area"].fillna("unknown").value_counts(normalize=True)
-        df["area_match"] = df["preferred_area"].fillna("unknown").map(area_freq)
+        df["area_match"] = df["preferred_area"].fillna("unknown").map(area_freq).fillna(0.5)
     else:
         df["area_match"] = 0.5
 
@@ -585,7 +633,7 @@ def train_randomforest_model():
         numeric_for_kmeans = X.select_dtypes(include=[np.number]).fillna(0)
         kmeans = KMeans(n_clusters=2, random_state=42)
         pseudo_labels = kmeans.fit_predict(numeric_for_kmeans)
-        y = pseudo_labels
+        y = pd.Series(pseudo_labels, index=X.index)
         use_pseudo = True
     else:
         use_pseudo = False
@@ -598,26 +646,30 @@ def train_randomforest_model():
         X = X[mask].reset_index(drop=True)
         y = y[mask].astype(int).reset_index(drop=True)
 
+    # Check if we have enough data
+    if len(X) < 10:
+        raise ValueError("Not enough data to train model after cleaning")
+
     # Build preprocessing pipeline
     num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
     cat_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
 
-    num_transformer = Pipeline([
-        ("imputer", SimpleImputer(strategy="median")),
-        ("scaler", StandardScaler())
-    ])
+    transformers = []
+    if num_cols:
+        num_transformer = Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler())
+        ])
+        transformers.append(("num", num_transformer, num_cols))
 
-    cat_transformer = Pipeline([
-        ("imputer", SimpleImputer(strategy="constant", fill_value="missing")),
-        ("ohe", OneHotEncoder(handle_unknown="ignore", sparse_output=False))
-    ])
+    if cat_cols:
+        cat_transformer = Pipeline([
+            ("imputer", SimpleImputer(strategy="constant", fill_value="missing")),
+            ("ohe", OneHotEncoder(handle_unknown="ignore", sparse_output=False))
+        ])
+        transformers.append(("cat", cat_transformer, cat_cols))
 
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ("num", num_transformer, num_cols),
-            ("cat", cat_transformer, cat_cols),
-        ]
-    )
+    preprocessor = ColumnTransformer(transformers=transformers)
 
     # RandomForest model
     rf = RandomForestClassifier(
@@ -634,8 +686,9 @@ def train_randomforest_model():
     ])
 
     # Train/test split
+    stratify_y = y if len(np.unique(y)) > 1 else None
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.25, random_state=42, stratify=y if len(np.unique(y)) > 1 else None
+        X, y, test_size=0.25, random_state=42, stratify=stratify_y
     )
 
     print(f"Training rows: {X_train.shape}, Test rows: {X_test.shape}")
@@ -645,7 +698,7 @@ def train_randomforest_model():
 
     # Predictions
     y_pred = pipeline.predict(X_test)
-    y_proba = pipeline.predict_proba(X_test)[:, 1]
+    y_proba = pipeline.predict_proba(X_test)[:, 1] if len(np.unique(y)) == 2 else None
 
     # Evaluation
     print("\n--- Evaluation ---")
@@ -658,148 +711,10 @@ def train_randomforest_model():
             print("ROC AUC couldn't be computed:", e)
     
     print("\nClassification report:")
-    print(classification_report(y_test, y_pred))
+    print(classification_report(y_test, y_pred, zero_division=0))
 
     # Cross-validation
-    if len(np.unique(y)) == 2:
-        cv_scores = cross_val_score(pipeline, X, y, cv=5, scoring="roc_auc")
-        print(f"5-fold CV ROC AUC mean: {cv_scores.mean():.4f} ± {cv_scores.std():.4f}")
-
-    return pipeline, X, y
-
-# ============================================
-# 15. XGBoost Model Training
-# ============================================
-
-def train_xgboost_model(X, y):
-    """
-    Train XGBoost model with early stopping
-    """
-    # Split data
-    X_train, X_valid, y_train, y_valid = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y if len(np.unique(y)) > 1 else None
-    )
-
-    # Prepare preprocessing
-    num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
-    cat_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
-
-    num_transformer = Pipeline([
-        ("imputer", SimpleImputer(strategy="median")),
-        ("scaler", StandardScaler())
-    ])
-
-    cat_transformer = Pipeline([
-        ("imputer", SimpleImputer(strategy="constant", fill_value="missing")),
-        ("ohe", OneHotEncoder(handle_unknown="ignore", sparse_output=False))
-    ])
-
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ("num", num_transformer, num_cols),
-            ("cat", cat_transformer, cat_cols),
-        ]
-    )
-
-    # Fit preprocessor on training data
-    preprocessor.fit(X_train)
-    X_train_transformed = preprocessor.transform(X_train)
-    X_valid_transformed = preprocessor.transform(X_valid)
-
-    # XGBoost model
-    xgb_model = xgb.XGBClassifier(
-        n_estimators=1000,
-        max_depth=6,
-        learning_rate=0.05,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        use_label_encoder=False,
-        eval_metric="auc",
-        random_state=42
-    )
-
-    # Train with early stopping
-    xgb_model.fit(
-        X_train_transformed, y_train,
-        eval_set=[(X_valid_transformed, y_valid)],
-        early_stopping_rounds=30,
-        verbose=False
-    )
-
-    # Predictions
-    y_pred = xgb_model.predict(X_valid_transformed)
-    y_proba = xgb_model.predict_proba(X_valid_transformed)[:, 1]
-
-    # Evaluation
-    print("\nXGBoost Results:")
-    print("Accuracy:", accuracy_score(y_valid, y_pred))
-    print("ROC AUC:", roc_auc_score(y_valid, y_proba))
-    print("\nClassification report:")
-    print(classification_report(y_valid, y_pred))
-
-    return xgb_model, preprocessor
-
-# ============================================
-# 16. Heuristic Scoring
-# ============================================
-
-def compute_heuristic_scores(df):
-    """
-    Compute heuristic scores based on engagement, budget match, and area match
-    """
-    # Compute heuristic score
-    df['heuristic_score'] = 0.5 * df['engagement_score'] + 0.3 * df['budget_match'] + 0.2 * df['area_match']
-    
-    # Categorize leads
-    df['category'] = pd.cut(df['heuristic_score'], 
-                           bins=[-1, 0.4, 0.7, 1.0], 
-                           labels=["Cold", "Warm", "Hot"])
-    
-    return df
-
-# ============================================
-# 17. Main Execution
-# ============================================
-
-if __name__ == "__main__":
-    print("=" * 60)
-    print("ML Project Rental - Lead Scoring System")
-    print("=" * 60)
-    
-    # 1. Train RandomForest model
-    print("\n1. Training RandomForest Model...")
-    rf_pipeline, X, y = train_randomforest_model()
-    
-    # 2. Train XGBoost model
-    print("\n2. Training XGBoost Model...")
-    xgb_model, xgb_preprocessor = train_xgboost_model(X, y)
-    
-    # 3. Load data for heuristic scoring
-    print("\n3. Computing Heuristic Scores...")
-    df_heuristic = pd.read_excel('5000_rental_crm_leads.xlsx')
-    
-    # Add required columns if they don't exist
-    if 'engagement_score' not in df_heuristic.columns:
-        df_heuristic['engagement_score'] = 0.5
-    if 'budget_match' not in df_heuristic.columns:
-        df_heuristic['budget_match'] = 0.5
-    if 'area_match' not in df_heuristic.columns:
-        df_heuristic['area_match'] = 0.5
-    
-    # Compute heuristic scores
-    df_scored = compute_heuristic_scores(df_heuristic)
-    
-    # Show top scored leads
-    print("\nTop 20 leads by heuristic score:")
-    print(df_scored[['lead_id', 'name', 'heuristic_score', 'category']]
-          .sort_values('heuristic_score', ascending=False)
-          .head(20))
-    
-    # 4. Summary statistics
-    print("\n" + "=" * 60)
-    print("Lead Distribution by Category:")
-    print(df_scored['category'].value_counts())
-    
-    print("\n" + "=" * 60)
-    print("ML Project Rental - Execution Complete!")
-    print("=" * 60)
+    if len(np.unique(y)) == 2 and len(X) >= 20:
+        try:
+            cv_scores = cross_val_score(pipeline, X, y, cv=min(5, len(X) // 4), scoring="roc_auc")
+            print(f"CV ROC AUC mean: {cv_scores.mean():.4

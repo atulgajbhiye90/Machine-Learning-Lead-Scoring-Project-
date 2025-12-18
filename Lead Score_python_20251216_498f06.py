@@ -717,4 +717,7 @@ def train_randomforest_model():
     if len(np.unique(y)) == 2 and len(X) >= 20:
         try:
             cv_scores = cross_val_score(pipeline, X, y, cv=min(5, len(X) // 4), scoring="roc_auc")
-            print(f"CV ROC AUC mean: {cv_scores.mean():.4f}")
+            try:
+    print(f"CV ROC AUC mean: {cv_scores.mean():.4f}")
+except Exception as e:
+    print(f"Error calculating CV ROC AUC mean: {e}")

@@ -717,8 +717,14 @@ def train_randomforest_model():
     if len(np.unique(y)) == 2 and len(X) >= 20:
         try:
             cv_scores = cross_val_score(pipeline, X, y, cv=min(5, len(X) // 4), scoring="roc_auc")
+
         try:
-            print(f"CV ROC AUC mean: {cv_scores.mean():.4f}")
+            lead_probability = model.predict_proba(X_transformed)[:, 1]
+            df["lead_score"] = (lead_probability * 100).round(0).astype(int)
+
         except Exception as e:
-            print(f"Error calculating CV ROC AUC mean: {e}")
+            print("Prediction failed:", e)
+
+        finally:
+            print("Lead scoring process completed")
 

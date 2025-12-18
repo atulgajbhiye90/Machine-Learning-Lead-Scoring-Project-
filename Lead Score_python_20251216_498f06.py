@@ -719,12 +719,15 @@ def train_randomforest_model():
             cv_scores = cross_val_score(pipeline, X, y, cv=min(5, len(X) // 4), scoring="roc_auc")
 
         try:
-            lead_probability = model.predict_proba(X_transformed)[:, 1]
-            df["lead_score"] = (lead_probability * 100).round(0).astype(int)
+    df = preprocess_data(df)
 
-        except Exception as e:
-            print("Prediction failed:", e)
+except Exception as e:
+    print("Preprocessing failed:", e)
 
-        finally:
-            print("Lead scoring process completed")
+# ✅ NEW try block (separate)
+try:
+    lead_probability = model.predict_proba(X)[:, 1]
+    df["lead_score"] = (lead_probability * 100).round(0).astype(int)
 
+except Exception as e:
+    print("Prediction failed:", e)

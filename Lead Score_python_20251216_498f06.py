@@ -1,11 +1,8 @@
-# ML Project Rental.py
-# Corrected version - Fixed syntax error and multiple issues
-
-import os
+import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
+import plotly.express as px
+import plotly.graph_objects as go
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
@@ -14,536 +11,77 @@ from sklearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, roc_auc_score, accuracy_score, confusion_matrix
 from sklearn.cluster import KMeans
-import xgboost as xgb
-import smtplib
-from email.message import EmailMessage
-import requests
-import difflib
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-from math import radians, sin, cos, asin, sqrt
+import warnings
+warnings.filterwarnings('ignore')
 
 # ============================================
-# 1. File Inspection
+# PAGE CONFIGURATION
 # ============================================
-
-print("Current working directory:")
-print(os.getcwd())
-
-# Load the data
-df = pd.read_excel('5000_rental_crm_leads.xlsx')
-
-# Display first 20 rows
-print("\nFirst 20 rows:")
-print(df.head(20))
-
-# Display last 20 rows
-print("\nLast 20 rows:")
-print(df.tail(20))
-
-# Dataset information
-print("\nDataset info:")
-df.info()
-
-# Statistical summary
-print("\nStatistical summary:")
-print(df.describe())
-
-# Dataset shape
-print(f"\nDataset shape: {df.shape}")
-
-# Data types
-print("\nData types:")
-print(df.dtypes)
+st.set_page_config(
+    page_title="ML Lead Scoring System",
+    page_icon="🎯",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 # ============================================
-# 2. Missing Values
+# CUSTOM CSS
 # ============================================
-
-print("\nMissing values:")
-print(df.isnull().sum())
-
-# Drop rows with missing values
-df_clean = df.dropna()
-print(f"\nOriginal data shape: {df.shape}")
-print(f"After dropping missing values: {df_clean.shape}")
-
-# Fill missing values with 0
-df_fill = df.fillna(0)
-print(f"After filling with 0: {df_fill.shape}")
-
-# Function to fill missing values with -1
-def fill_missing_minus_one(df):
-    df_copy = df.copy()
-    df_copy.fillna(-1, inplace=True)
-    return df_copy
-
-# ============================================
-# 3. Remove Duplicates
-# ============================================
-
-print(f"\nOriginal data shape: {df.shape}")
-df_no_duplicates = df.drop_duplicates()
-print(f"After removing duplicates: {df_no_duplicates.shape}")
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 3rem;
+        font-weight: bold;
+        color: #1f77b4;
+        text-align: center;
+        padding: 1rem 0;
+    }
+    .metric-card {
+        background-color: #f0f2f6;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 5px solid #1f77b4;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2rem;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # ============================================
-# 4. Feature Engineering
-# ============================================
-
-# Reload data for feature engineering
-df = pd.read_excel('5000_rental_crm_leads.xlsx')
-
-# 4.1 Remove rows with missing values
-df_clean = df.dropna()
-print(f"After dropping missing values: {df_clean.shape}")
-
-# 4.2 Fill missing values with constant
-df_fill = df.fillna({'name': 'Unknown', 'budget_min': 0, 'budget_max': 0})
-print(f"After filling with constants: {df_fill.shape}")
-
-# 4.3 Remove all duplicate rows
-df_no_duplicates = df.drop_duplicates()
-print(f"After removing duplicates: {df_no_duplicates.shape}")
-
-# FIXED: Clean preferred_area column (was incorrectly using user_type)
-if 'preferred_area' in df.columns:
-    df['preferred_area'] = df['preferred_area'].replace({
-        'BHK': 'bhk',
-        'Bhk': 'bhk',
-    })
-    print("Before cleaning:", df['preferred_area'].unique()[:10])  # Show first 10
-    print("After cleaning:", df['preferred_area'].unique()[:10])
-
-# ============================================
-# 5. Lead Scoring Functions
+# HELPER FUNCTIONS
 # ============================================
 
 def map_probability_to_category(prob_score):
     """Map probability (0-100) to category label."""
     if prob_score >= 70:
         return "Hot"
-    if prob_score >= 40:
+    elif prob_score >= 40:
         return "Warm"
-    return "Cold"
-
-def score_leads_from_model(df, model, feature_cols):
-    """
-    Score leads using a trained model (XGBoost sklearn/booster).
-    - df: DataFrame of raw leads
-    - model: trained model object
-    - feature_cols: columns used for prediction
-    Returns df with new columns: score (0-100), category
-    """
-    X = df[feature_cols].fillna(0)
-    # handle both sklearn wrapper and xgboost.Booster
-    try:
-        probs = model.predict_proba(X)[:, 1]  # sklearn style
-    except Exception:
-        try:
-            dmat = xgb.DMatrix(X)
-            probs = model.predict(dmat)  # xgboost.Booster
-        except Exception:
-            raise RuntimeError("Model predict failed. Check model type.")
-    
-    df = df.copy()
-    df['score'] = (probs * 100).round(2)
-    df['category'] = df['score'].apply(map_probability_to_category)
-    df = df.sort_values('score', ascending=False)
-    return df
-
-# ============================================
-# 6. Lead Prioritization Functions
-# ============================================
-
-def prioritize_leads(df, top_n_per_agent=10):
-    """
-    Given scored df with 'score' and 'agent_id' optional, return top N prioritized leads.
-    If no agent assignment present, it returns global top_n.
-    """
-    if 'agent_id' in df.columns:
-        prioritized = df.groupby('agent_id').apply(
-            lambda g: g.sort_values('score', ascending=False).head(top_n_per_agent)
-        ).reset_index(drop=True)
     else:
-        prioritized = df.sort_values('score', ascending=False).head(top_n_per_agent)
-    return prioritized
+        return "Cold"
 
-def select_for_immediate_followup(df, min_score=60, max_age_days=7):
-    """Select leads requiring immediate follow-up based on score and age."""
-    df = df.copy()
-    if 'created_date' in df.columns:
-        df['lead_age_days'] = (pd.Timestamp.now() - pd.to_datetime(df['created_date'], errors='coerce')).dt.days
-        df['lead_age_days'] = df['lead_age_days'].fillna(999)
-        return df[(df['score'] >= min_score) & (df['lead_age_days'] <= max_age_days)].sort_values('score', ascending=False)
-    else:
-        # If no created_date, just filter by score
-        return df[df['score'] >= min_score].sort_values('score', ascending=False)
-
-# ============================================
-# 7. Automated Alerts Functions
-# ============================================
-
-def send_email_notification(to_email, subject, body, smtp_cfg):
-    """Simple SMTP mailer. Replace with SendGrid/Twilio Send API in prod."""
+@st.cache_data
+def load_data(file_path):
+    """Load data from Excel file"""
     try:
-        msg = EmailMessage()
-        msg['Subject'] = subject
-        msg['From'] = smtp_cfg['from']
-        msg['To'] = to_email
-        msg.set_content(body)
-        
-        with smtplib.SMTP(smtp_cfg['host'], smtp_cfg.get('port', 25)) as s:
-            if smtp_cfg.get('starttls', False):
-                s.starttls()
-            if smtp_cfg.get('username'):
-                s.login(smtp_cfg['username'], smtp_cfg['password'])
-            s.send_message(msg)
-        return True
-    except Exception as e:
-        print(f"Email send failed: {e}")
-        return False
-
-def alert_high_intent_leads(df, smtp_cfg, agent_lookup):
-    """
-    For all leads category == 'Hot', send alert to assigned agent(s).
-    - agent_lookup: function or dict mapping agent_id -> {'email':..., 'phone':...}
-    """
-    hot = df[df['category'] == 'Hot'].copy()
-    for _, lead in hot.iterrows():
-        agent_info = agent_lookup.get(lead.get('agent_id')) if isinstance(agent_lookup, dict) else agent_lookup(lead)
-        if not agent_info:
-            continue
-        
-        subject = f"🔥 Hot Lead: {lead.get('lead_id')} ({lead.get('score')}%)"
-        body = f"""
-Lead ID: {lead.get('lead_id')}
-Name: {lead.get('name')}
-Score: {lead.get('score')}%
-Last active: {lead.get('last_active')}
-Source: {lead.get('source')}
-Please follow up within the SLA.
-"""
-        # Email (placeholder)
-        send_email_notification(agent_info['email'], subject, body, smtp_cfg)
-        # TODO: phone / SMS via Twilio or WhatsApp API
-
-# ============================================
-# 8. Lead Assignment Functions
-# ============================================
-
-def assign_leads_round_robin(df, agents):
-    """
-    Assign leads to agents in round-robin order (simple balancing).
-    - agents: list of agent dicts or agent ids
-    """
-    df = df.copy()
-    if len(agents) == 0:
+        df = pd.read_excel(file_path)
         return df
+    except Exception as e:
+        st.error(f"Error loading file: {e}")
+        return None
+
+@st.cache_resource
+def train_model(df):
+    """Train RandomForest model with progress tracking"""
     
-    agent_ids = [agent if isinstance(agent, (int, str)) else agent['id'] for agent in agents]
-    assigned = []
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     
-    for i, _ in enumerate(df.sort_values('score', ascending=False).iterrows()):
-        assigned.append(agent_ids[i % len(agent_ids)])
-    
-    df['agent_id'] = assigned
-    return df
-
-def assign_by_capacity_and_skill(df, agents_df):
-    """
-    agents_df columns: agent_id, capacity_remaining, skill_score (higher better)
-    Strategy: consider score * skill_score and capacity.
-    """
-    df = df.copy()
-    df['assigned_agent'] = None
-    agents_sorted = agents_df.sort_values(['capacity_remaining', 'skill_score'], ascending=[False, False]).copy()
-    
-    for idx, lead in df.sort_values('score', ascending=False).iterrows():
-        # pick first agent with capacity > 0 and highest skill relevancy
-        available_agents = agents_sorted[agents_sorted['capacity_remaining'] > 0]
-        if len(available_agents) == 0:
-            break
-        
-        candidate = available_agents.iloc[0]
-        df.at[idx, 'assigned_agent'] = candidate['agent_id']
-        # Update capacity
-        agents_sorted.loc[agents_sorted['agent_id'] == candidate['agent_id'], 'capacity_remaining'] -= 1
-    
-    return df
-
-# ============================================
-# 9. KPI Tracking Functions
-# ============================================
-
-def compute_kpis(leads_df, interactions_df, revenue_df):
-    """
-    - leads_df must include lead_id, assigned_agent, created_date, converted_date (if any)
-    - interactions_df: events with lead_id, event_type, timestamp
-    - revenue_df: lead_id, revenue_amount
-    Returns a KPIs dict and KPI DataFrames.
-    """
-    # Time to convert (days)
-    conv = leads_df.dropna(subset=['converted_date']).copy()
-    if len(conv) > 0:
-        conv['time_to_convert_days'] = (pd.to_datetime(conv['converted_date']) - 
-                                        pd.to_datetime(conv['created_date'])).dt.total_seconds() / 86400.0
-
-        # Per-agent KPIs
-        agent_stats = conv.groupby('assigned_agent').agg(
-            conversions=('lead_id', 'count'),
-            avg_time_to_convert=('time_to_convert_days', 'mean')
-        ).reset_index()
-
-        revenue_per_lead = revenue_df.groupby('lead_id')['revenue_amount'].sum().reset_index()
-        conv = conv.merge(revenue_per_lead, on='lead_id', how='left').fillna({'revenue_amount': 0})
-
-        revenue_by_agent = conv.groupby('assigned_agent')['revenue_amount'].sum().reset_index().rename(
-            columns={'revenue_amount': 'revenue'})
-
-        agent_kpis = agent_stats.merge(revenue_by_agent, on='assigned_agent', how='left').fillna(0)
-        
-        overall = {
-            'total_leads': len(leads_df),
-            'total_conversions': len(conv),
-            'avg_time_to_convert_days': conv['time_to_convert_days'].mean(),
-            'total_revenue': conv['revenue_amount'].sum()
-        }
-    else:
-        overall = {
-            'total_leads': len(leads_df),
-            'total_conversions': 0,
-            'avg_time_to_convert_days': None,
-            'total_revenue': 0
-        }
-        agent_kpis = pd.DataFrame()
-    
-    return overall, agent_kpis
-
-# ============================================
-# 10. Batch Scoring and CRM Integration
-# ============================================
-
-def batch_score_and_export(df, model, feature_cols, crm_update_endpoint, api_key):
-    """
-    Score leads in batch and push results back to CRM via API.
-    - crm_update_endpoint: URL to update lead fields in CRM
-    """
-    scored = score_leads_from_model(df, model, feature_cols)
-    
-    # Create payload (CRM-specific)
-    payloads = []
-    for _, row in scored.iterrows():
-        payloads.append({
-            "lead_id": int(row['lead_id']) if pd.notna(row['lead_id']) else None,
-            "score": float(row['score']),
-            "category": row['category']
-        })
-    
-    # Push updates (example)
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    for p in payloads:
-        try:
-            # Replace with CRM bulk API when available
-            requests.post(crm_update_endpoint, json=p, headers=headers, timeout=5)
-        except Exception as e:
-            print(f"Failed to update lead {p['lead_id']}: {e}")
-    
-    return scored
-
-# ============================================
-# 11. Budget Match Functions
-# ============================================
-
-def budget_match_score(lead_budget, property_rent):
-    """
-    Score in [0,1]. 1 = perfect match (equal), 0 = huge mismatch.
-    Uses relative difference: score = max(0, 1 - abs(diff) / max(lead_budget, property_rent))
-    Works when both are positive numbers.
-    """
-    if pd.isna(lead_budget) or pd.isna(property_rent):
-        return np.nan
-    if lead_budget <= 0 or property_rent <= 0:
-        return np.nan
-    
-    diff = abs(lead_budget - property_rent)
-    denom = max(lead_budget, property_rent)
-    return max(0.0, 1.0 - diff / denom)
-
-def budget_match_best_property(lead_budget, properties_df, rent_col='rent'):
-    """
-    For a lead, compute best budget_match across multiple candidate properties and return the best score.
-    properties_df: DataFrame of properties (each row has rent_col)
-    """
-    if len(properties_df) == 0 or pd.isna(lead_budget):
-        return np.nan
-    
-    rents = properties_df[rent_col].dropna().astype(float)
-    if rents.empty:
-        return np.nan
-    
-    scores = rents.apply(lambda r: budget_match_score(lead_budget, r))
-    return float(scores.max())
-
-def compute_budget_match(df, lead_budget_col="budget", property_min_col="prop_rent_min", property_max_col="prop_rent_max"):
-    """
-    Returns a budget_match score in [0,1]:
-      - 1.0 if lead budget falls inside property's [min,max]
-      - declines linearly when outside (capped at 0)
-    """
-    lb = pd.to_numeric(df[lead_budget_col], errors='coerce')
-    pmin = pd.to_numeric(df[property_min_col], errors='coerce')
-    pmax = pd.to_numeric(df[property_max_col], errors='coerce')
-
-    # when budget inside range => 1
-    inside = (lb >= pmin) & (lb <= pmax)
-    budget_match = np.where(inside, 1.0, 0.0)
-
-    # For outside values, compute distance ratio and map to (0,1)
-    scale = (pmax - pmin).abs().replace(0, 5000)  # fallback scale
-    below = lb < pmin
-    above = lb > pmax
-
-    budget_match = np.where(
-        below,
-        np.maximum(0, 1 - (pmin - lb) / (scale + 1e-9)),
-        budget_match
-    )
-    budget_match = np.where(
-        above,
-        np.maximum(0, 1 - (lb - pmax) / (scale + 1e-9)),
-        budget_match
-    )
-
-    return pd.Series(budget_match, index=df.index, name="budget_match")
-
-# ============================================
-# 12. Area Match Functions
-# ============================================
-
-def simple_area_match(lead_area, property_area):
-    """
-    Returns 1 if exact match, 0.5 if same locality token exists, else 0.
-    Accepts strings or list-like.
-    """
-    if pd.isna(lead_area) or pd.isna(property_area):
-        return 0.0
-    
-    la = str(lead_area).lower()
-    pa = str(property_area).lower()
-    
-    if la == pa:
-        return 1.0
-    
-    # token overlap
-    la_tokens = set(la.replace(',', ' ').split())
-    pa_tokens = set(pa.replace(',', ' ').split())
-    overlap = la_tokens.intersection(pa_tokens)
-    
-    if len(overlap) > 0:
-        return min(0.75, 0.5 + 0.1 * len(overlap))  # modest boost for partial matches
-    
-    return 0.0
-
-def tfidf_area_match(series_lead_areas, series_property_areas):
-    """Compute TF-IDF based area matching scores."""
-    corpus = pd.concat([series_lead_areas.fillna(""), series_property_areas.fillna("")]).astype(str)
-    tf = TfidfVectorizer(stop_words="english", ngram_range=(1, 2))
-    tfidf = tf.fit_transform(corpus)
-    
-    n = len(series_lead_areas)
-    lead_mat = tfidf[:n]
-    prop_mat = tfidf[n:]
-    
-    sims = np.array([cosine_similarity(lead_mat[i], prop_mat[i])[0, 0] for i in range(n)])
-    return pd.Series(sims, index=series_lead_areas.index, name="area_match_tfidf")
-
-# ============================================
-# 13. Engagement Score Functions
-# ============================================
-
-def compute_engagement_score(df,
-                             views_col="views_count",
-                             avg_time_col="avg_view_time_sec",
-                             saved_col="saved_properties",
-                             repeat_col="repeated_visits"):
-    """Compute engagement score from behavioral metrics."""
-    # Normalize each metric to 0-1 using log-scaling to reduce skew
-    def norm_series(s):
-        s = pd.to_numeric(s, errors="coerce").fillna(0)
-        max_val = s.max()
-        if max_val > 0:
-            return np.log1p(s) / np.log1p(max_val)
-        return s * 0.0
-
-    v = norm_series(df[views_col])
-    t = norm_series(df[avg_time_col])
-    s = norm_series(df[saved_col])
-    r = norm_series(df[repeat_col])
-
-    # weights (tune for your business)
-    wv, wt, ws, wr = 0.4, 0.25, 0.2, 0.15
-    engagement = wv * v + wt * t + ws * s + wr * r
-    
-    # Clip 0-1
-    return pd.Series(np.clip(engagement, 0, 1), index=df.index, name="engagement_score")
-
-def compute_interaction_features(df,
-                                 first_resp_col="first_response_time_hours",
-                                 followups_col="follow_up_count",
-                                 lead_resp_col="lead_response_time_hours",
-                                 whatsapp_col="whatsapp_clicks",
-                                 call_col="call_clicks",
-                                 chat_col="chat_messages"):
-    """Compute interaction-based features."""
-    # Ensure numeric and fillna
-    res = pd.DataFrame(index=df.index)
-    
-    # First response time
-    if first_resp_col in df.columns:
-        res["first_response_time_hours"] = pd.to_numeric(df[first_resp_col], errors="coerce")
-        median_val = res["first_response_time_hours"].median()
-        res["first_response_time_hours"] = res["first_response_time_hours"].fillna(median_val if pd.notna(median_val) else 24)
-    else:
-        res["first_response_time_hours"] = 24
-
-    # Follow-up count
-    res["follow_up_count"] = pd.to_numeric(df.get(followups_col, 0), errors="coerce").fillna(0)
-    
-    # Lead response time
-    if lead_resp_col in df.columns:
-        res["lead_response_time_hours"] = pd.to_numeric(df[lead_resp_col], errors="coerce")
-        median_val = res["lead_response_time_hours"].median()
-        res["lead_response_time_hours"] = res["lead_response_time_hours"].fillna(median_val if pd.notna(median_val) else 24)
-    else:
-        res["lead_response_time_hours"] = 24
-
-    # Interaction counts
-    res["whatsapp_clicks"] = pd.to_numeric(df.get(whatsapp_col, 0), errors="coerce").fillna(0)
-    res["call_clicks"] = pd.to_numeric(df.get(call_col, 0), errors="coerce").fillna(0)
-    res["chat_messages"] = pd.to_numeric(df.get(chat_col, 0), errors="coerce").fillna(0)
-
-    # Derived features
-    res["agent_response_fast"] = (res["first_response_time_hours"] <= 1).astype(int)
-    res["interaction_count"] = res[["follow_up_count", "whatsapp_clicks", "call_clicks", "chat_messages"]].sum(axis=1)
-    
-    return res
-
-# ============================================
-# 14. RandomForest Model Training
-# ============================================
-
-def train_randomforest_model():
-    """
-    RandomForest lead scoring pipeline (supervised + fallback semi-supervised)
-    """
-    # Load data
-    path = "5000_rental_crm_leads.xlsx"
-    df = pd.read_excel(path)
-
-    print("Rows, cols:", df.shape)
-    print("Columns:", df.columns.tolist())
-
     # Feature engineering
+    status_text.text("Step 1/5: Feature Engineering...")
+    progress_bar.progress(20)
+    
     if "budget_min" in df.columns and "budget_max" in df.columns:
         df["budget_mid"] = df[["budget_min", "budget_max"]].mean(axis=1)
     elif "budget" in df.columns:
@@ -610,6 +148,9 @@ def train_randomforest_model():
         df["recency_score"] = 0.0
 
     # Prepare features
+    status_text.text("Step 2/5: Preparing Features...")
+    progress_bar.progress(40)
+    
     feature_cols = [
         "budget_match", "area_match", "engagement_score",
         "total_interactions", "recency_score",
@@ -628,29 +169,24 @@ def train_randomforest_model():
         y = pd.to_numeric(df["converted"], errors="coerce")
 
     # Handle missing labels
-    if y is None:
-        print("No 'converted' column found. Using unsupervised KMeans to create pseudo-labels.")
+    if y is None or y.isna().all():
+        status_text.text("No 'converted' column found. Using KMeans for pseudo-labels...")
         numeric_for_kmeans = X.select_dtypes(include=[np.number]).fillna(0)
         kmeans = KMeans(n_clusters=2, random_state=42)
         pseudo_labels = kmeans.fit_predict(numeric_for_kmeans)
         y = pd.Series(pseudo_labels, index=X.index)
-        use_pseudo = True
     else:
-        use_pseudo = False
-        n_missing = y.isna().sum()
-        print(f"'converted' column found with {n_missing} missing values out of {len(y)} rows.")
-        
-        if n_missing > 0:
-            print("Dropping rows with NaN labels for supervised training.")
         mask = y.notna()
         X = X[mask].reset_index(drop=True)
         y = y[mask].astype(int).reset_index(drop=True)
 
-    # Check if we have enough data
     if len(X) < 10:
         raise ValueError("Not enough data to train model after cleaning")
 
     # Build preprocessing pipeline
+    status_text.text("Step 3/5: Building Pipeline...")
+    progress_bar.progress(60)
+    
     num_cols = X.select_dtypes(include=[np.number]).columns.tolist()
     cat_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
 
@@ -686,12 +222,13 @@ def train_randomforest_model():
     ])
 
     # Train/test split
+    status_text.text("Step 4/5: Training Model...")
+    progress_bar.progress(80)
+    
     stratify_y = y if len(np.unique(y)) > 1 else None
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.25, random_state=42, stratify=stratify_y
     )
-
-    print(f"Training rows: {X_train.shape}, Test rows: {X_test.shape}")
 
     # Train model
     pipeline.fit(X_train, y_train)
@@ -700,77 +237,402 @@ def train_randomforest_model():
     y_pred = pipeline.predict(X_test)
     y_proba = pipeline.predict_proba(X_test)[:, 1] if len(np.unique(y)) == 2 else None
 
-    # Evaluation
-    print("\n--- Evaluation ---")
-    print("Accuracy:", accuracy_score(y_test, y_pred))
-    
+    # Evaluation metrics
+    accuracy = accuracy_score(y_test, y_pred)
+    roc_auc = None
     if y_proba is not None and len(np.unique(y_test)) == 2:
         try:
-            print("ROC AUC:", roc_auc_score(y_test, y_proba))
-        except Exception as e:
-            print("ROC AUC couldn't be computed:", e)
-    
-    print("\nClassification report:")
-    print(classification_report(y_test, y_pred, zero_division=0))
+            roc_auc = roc_auc_score(y_test, y_proba)
+        except:
+            pass
 
-    # Cross-validation
-    if len(np.unique(y)) == 2 and len(X) >= 20:
-        try:
-            cv_scores = cross_val_score(pipeline, X, y, cv=min(5, len(X) // 4), scoring="roc_auc")
-            print(f"\nCross-validation ROC AUC scores: {cv_scores}")
-            print(f"Mean CV ROC AUC: {cv_scores.mean():.3f} (+/- {cv_scores.std():.3f})")
-        except Exception as e:
-            print(f"Cross-validation failed: {e}")
+    # Score all leads
+    status_text.text("Step 5/5: Scoring Leads...")
+    progress_bar.progress(100)
     
-    # Score all leads using the full dataset
-    try:
-        df_scored = df.copy()
-        # Use the original X (before train/test split) for scoring all leads
-        lead_probability = pipeline.predict_proba(X)[:, 1]
-        df_scored.loc[X.index, "lead_score"] = (lead_probability * 100).round(0).astype(int)
-        df_scored["lead_score"] = df_scored["lead_score"].fillna(0).astype(int)
-        df_scored["lead_category"] = df_scored["lead_score"].apply(map_probability_to_category)
-        
-        print("\nLead score distribution:")
-        print(df_scored["lead_category"].value_counts())
-        
-        return pipeline, df_scored, feature_cols
-    except Exception as e:
-        print("Scoring error:", e)
-        return pipeline, df, feature_cols
-
+    df_scored = df.copy()
+    lead_probability = pipeline.predict_proba(X)[:, 1]
+    df_scored.loc[X.index, "lead_score"] = (lead_probability * 100).round(0).astype(int)
+    df_scored["lead_score"] = df_scored["lead_score"].fillna(0).astype(int)
+    df_scored["lead_category"] = df_scored["lead_score"].apply(map_probability_to_category)
+    
+    status_text.text("✅ Model Training Complete!")
+    progress_bar.progress(100)
+    
+    return pipeline, df_scored, feature_cols, accuracy, roc_auc
 
 # ============================================
-# 15. Main Execution
+# MAIN APP
 # ============================================
+
+def main():
+    # Header
+    st.markdown('<h1 class="main-header">🎯 ML Lead Scoring System</h1>', unsafe_allow_html=True)
+    st.markdown("---")
+    
+    # Sidebar
+    with st.sidebar:
+        st.header("⚙️ Configuration")
+        
+        # File upload option
+        upload_option = st.radio(
+            "Data Source:",
+            ["Use Default Dataset", "Upload Custom File"]
+        )
+        
+        if upload_option == "Upload Custom File":
+            uploaded_file = st.file_uploader(
+                "Upload Excel File",
+                type=['xlsx', 'xls'],
+                help="Upload your CRM leads Excel file"
+            )
+            data_path = uploaded_file
+        else:
+            data_path = "5000_rental_crm_leads.xlsx"
+        
+        st.markdown("---")
+        
+        # Train button
+        train_button = st.button("🚀 Train Model & Score Leads", type="primary", use_container_width=True)
+        
+        st.markdown("---")
+        st.info("💡 **Tip:** Training may take 30-60 seconds depending on data size.")
+    
+    # Main content
+    if train_button and data_path:
+        # Load data
+        with st.spinner("Loading data..."):
+            df = load_data(data_path)
+        
+        if df is not None:
+            # Display data info
+            with st.expander("📊 Dataset Information", expanded=False):
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Rows", f"{len(df):,}")
+                with col2:
+                    st.metric("Total Columns", len(df.columns))
+                with col3:
+                    st.metric("Missing Values", df.isnull().sum().sum())
+                
+                st.dataframe(df.head(10), use_container_width=True)
+            
+            # Train model
+            try:
+                model, scored_df, features, accuracy, roc_auc = train_model(df)
+                
+                # Store in session state
+                st.session_state['model'] = model
+                st.session_state['scored_df'] = scored_df
+                st.session_state['features'] = features
+                st.session_state['accuracy'] = accuracy
+                st.session_state['roc_auc'] = roc_auc
+                
+                st.success("✅ Model trained successfully!")
+                
+            except Exception as e:
+                st.error(f"❌ Error during training: {e}")
+                import traceback
+                with st.expander("Error Details"):
+                    st.code(traceback.format_exc())
+    
+    # Display results if model is trained
+    if 'scored_df' in st.session_state:
+        df = st.session_state['scored_df']
+        accuracy = st.session_state.get('accuracy', 0)
+        roc_auc = st.session_state.get('roc_auc', None)
+        
+        # Tabs for different views
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "📊 Overview", 
+            "🔥 Top Leads", 
+            "📈 Analytics",
+            "📋 All Leads",
+            "💾 Export"
+        ])
+        
+        with tab1:
+            st.subheader("Key Metrics")
+            
+            # Metrics row
+            col1, col2, col3, col4, col5 = st.columns(5)
+            
+            with col1:
+                st.metric("Total Leads", f"{len(df):,}")
+            with col2:
+                hot_leads = len(df[df['lead_category'] == 'Hot'])
+                st.metric("🔥 Hot Leads", hot_leads, delta=f"{hot_leads/len(df)*100:.1f}%")
+            with col3:
+                warm_leads = len(df[df['lead_category'] == 'Warm'])
+                st.metric("🌡️ Warm Leads", warm_leads, delta=f"{warm_leads/len(df)*100:.1f}%")
+            with col4:
+                cold_leads = len(df[df['lead_category'] == 'Cold'])
+                st.metric("❄️ Cold Leads", cold_leads, delta=f"{cold_leads/len(df)*100:.1f}%")
+            with col5:
+                avg_score = df['lead_score'].mean()
+                st.metric("Avg Score", f"{avg_score:.1f}")
+            
+            st.markdown("---")
+            
+            # Model performance
+            st.subheader("Model Performance")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Accuracy", f"{accuracy*100:.2f}%")
+            with col2:
+                if roc_auc:
+                    st.metric("ROC AUC", f"{roc_auc:.3f}")
+                else:
+                    st.metric("ROC AUC", "N/A")
+            
+            st.markdown("---")
+            
+            # Charts
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Category distribution
+                category_counts = df['lead_category'].value_counts()
+                fig_pie = px.pie(
+                    values=category_counts.values,
+                    names=category_counts.index,
+                    title="Lead Distribution by Category",
+                    color=category_counts.index,
+                    color_discrete_map={'Hot': '#ff4444', 'Warm': '#ffaa00', 'Cold': '#4444ff'}
+                )
+                st.plotly_chart(fig_pie, use_container_width=True)
+            
+            with col2:
+                # Score distribution
+                fig_hist = px.histogram(
+                    df,
+                    x='lead_score',
+                    nbins=20,
+                    title="Lead Score Distribution",
+                    labels={'lead_score': 'Lead Score', 'count': 'Number of Leads'}
+                )
+                fig_hist.update_traces(marker_color='#1f77b4')
+                st.plotly_chart(fig_hist, use_container_width=True)
+        
+        with tab2:
+            st.subheader("🔥 Top 20 Priority Leads")
+            
+            # Filter controls
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                category_filter = st.multiselect(
+                    "Filter by Category:",
+                    options=['Hot', 'Warm', 'Cold'],
+                    default=['Hot']
+                )
+            with col2:
+                min_score = st.number_input("Min Score:", 0, 100, 70)
+            
+            # Filter data
+            filtered_df = df[
+                (df['lead_category'].isin(category_filter)) & 
+                (df['lead_score'] >= min_score)
+            ]
+            
+            # Display columns selection
+            display_cols = ['lead_id', 'name', 'lead_score', 'lead_category']
+            optional_cols = ['source', 'budget_mid', 'preferred_area', 'total_interactions']
+            available_optional = [col for col in optional_cols if col in filtered_df.columns]
+            
+            if available_optional:
+                selected_cols = st.multiselect(
+                    "Additional Columns:",
+                    options=available_optional,
+                    default=available_optional[:2] if len(available_optional) >= 2 else available_optional
+                )
+                display_cols.extend(selected_cols)
+            
+            # Display top leads
+            top_leads = filtered_df.nlargest(20, 'lead_score')[display_cols]
+            
+            # Color code the dataframe
+            def color_category(val):
+                if val == 'Hot':
+                    return 'background-color: #ffcccc'
+                elif val == 'Warm':
+                    return 'background-color: #fff4cc'
+                else:
+                    return 'background-color: #ccddff'
+            
+            styled_df = top_leads.style.applymap(
+                color_category,
+                subset=['lead_category'] if 'lead_category' in top_leads.columns else []
+            )
+            
+            st.dataframe(styled_df, use_container_width=True, height=600)
+            
+            st.metric("Filtered Leads", len(filtered_df))
+        
+        with tab3:
+            st.subheader("📈 Advanced Analytics")
+            
+            # Source analysis if available
+            if 'source' in df.columns:
+                st.markdown("#### Lead Performance by Source")
+                source_stats = df.groupby('source').agg({
+                    'lead_score': ['mean', 'count'],
+                    'lead_category': lambda x: (x == 'Hot').sum()
+                }).round(2)
+                source_stats.columns = ['Avg Score', 'Count', 'Hot Leads']
+                source_stats = source_stats.sort_values('Avg Score', ascending=False)
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.dataframe(source_stats, use_container_width=True)
+                with col2:
+                    fig = px.bar(
+                        source_stats.reset_index(),
+                        x='source',
+                        y='Avg Score',
+                        title='Average Lead Score by Source',
+                        color='Avg Score',
+                        color_continuous_scale='Blues'
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+            
+            # Budget analysis if available
+            if 'budget_mid' in df.columns:
+                st.markdown("#### Score vs Budget Analysis")
+                fig_scatter = px.scatter(
+                    df.dropna(subset=['budget_mid']),
+                    x='budget_mid',
+                    y='lead_score',
+                    color='lead_category',
+                    title='Lead Score vs Budget',
+                    labels={'budget_mid': 'Budget', 'lead_score': 'Lead Score'},
+                    color_discrete_map={'Hot': '#ff4444', 'Warm': '#ffaa00', 'Cold': '#4444ff'}
+                )
+                st.plotly_chart(fig_scatter, use_container_width=True)
+            
+            # Engagement analysis
+            if 'engagement_score' in df.columns:
+                st.markdown("#### Engagement Score Distribution")
+                fig_box = px.box(
+                    df,
+                    x='lead_category',
+                    y='engagement_score',
+                    title='Engagement Score by Category',
+                    color='lead_category',
+                    color_discrete_map={'Hot': '#ff4444', 'Warm': '#ffaa00', 'Cold': '#4444ff'}
+                )
+                st.plotly_chart(fig_box, use_container_width=True)
+        
+        with tab4:
+            st.subheader("📋 All Scored Leads")
+            
+            # Search and filter
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                search_term = st.text_input("🔍 Search by Name/ID:", "")
+            with col2:
+                score_range = st.slider("Score Range:", 0, 100, (0, 100))
+            with col3:
+                sort_by = st.selectbox("Sort by:", ['lead_score', 'lead_id', 'name'])
+            
+            # Apply filters
+            filtered = df.copy()
+            if search_term:
+                filtered = filtered[
+                    filtered['name'].str.contains(search_term, case=False, na=False) |
+                    filtered['lead_id'].astype(str).str.contains(search_term, case=False)
+                ]
+            filtered = filtered[
+                (filtered['lead_score'] >= score_range[0]) &
+                (filtered['lead_score'] <= score_range[1])
+            ]
+            filtered = filtered.sort_values(sort_by, ascending=False)
+            
+            st.info(f"Showing {len(filtered)} of {len(df)} leads")
+            st.dataframe(filtered, use_container_width=True, height=600)
+        
+        with tab5:
+            st.subheader("💾 Export Scored Leads")
+            
+            st.markdown("#### Download Options")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # CSV Export
+                csv = df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📄 Download as CSV",
+                    data=csv,
+                    file_name='scored_leads.csv',
+                    mime='text/csv',
+                    use_container_width=True
+                )
+            
+            with col2:
+                # Excel Export
+                @st.cache_data
+                def convert_df_to_excel(dataframe):
+                    from io import BytesIO
+                    output = BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        dataframe.to_excel(writer, index=False, sheet_name='Scored Leads')
+                    return output.getvalue()
+                
+                excel_data = convert_df_to_excel(df)
+                st.download_button(
+                    label="📊 Download as Excel",
+                    data=excel_data,
+                    file_name='scored_leads.xlsx',
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    use_container_width=True
+                )
+            
+            st.markdown("---")
+            
+            # Export summary
+            st.markdown("#### Export Summary")
+            summary_data = {
+                'Metric': ['Total Leads', 'Hot Leads', 'Warm Leads', 'Cold Leads', 'Average Score'],
+                'Value': [
+                    len(df),
+                    len(df[df['lead_category'] == 'Hot']),
+                    len(df[df['lead_category'] == 'Warm']),
+                    len(df[df['lead_category'] == 'Cold']),
+                    f"{df['lead_score'].mean():.2f}"
+                ]
+            }
+            st.table(pd.DataFrame(summary_data))
+    
+    else:
+        # Welcome screen
+        st.info("👈 Click 'Train Model & Score Leads' in the sidebar to get started!")
+        
+        st.markdown("""
+        ### 🎯 Welcome to ML Lead Scoring System
+        
+        This application uses machine learning to automatically score and prioritize your rental CRM leads.
+        
+        #### ✨ Features:
+        - 🤖 **Automated Lead Scoring** using Random Forest ML model
+        - 📊 **Interactive Analytics** with visual insights
+        - 🔥 **Priority Leads** identification (Hot/Warm/Cold)
+        - 📈 **Performance Metrics** and model evaluation
+        - 💾 **Easy Export** to CSV or Excel
+        
+        #### 🚀 How to Use:
+        1. Use the default dataset or upload your own Excel file
+        2. Click "Train Model & Score Leads" in the sidebar
+        3. Explore results in different tabs
+        4. Export scored leads for your CRM
+        
+        #### 📋 Required Data Format:
+        Your Excel file should contain columns like:
+        - `lead_id`, `name` (identifiers)
+        - `budget_min`, `budget_max` or `budget` (numerical)
+        - `preferred_area` (text)
+        - `views_count`, `saved_properties` (engagement metrics)
+        - `converted` (optional: 1/0 for supervised learning)
+        """)
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("Starting ML Lead Scoring Pipeline")
-    print("=" * 60)
-    
-    try:
-        # Train the model
-        model, scored_df, features = train_randomforest_model()
-        
-        print("\n" + "=" * 60)
-        print("Model Training Complete!")
-        print("=" * 60)
-        
-        # Display top 10 leads
-        print("\nTop 10 Leads by Score:")
-        print(scored_df.nlargest(10, 'lead_score')[['lead_id', 'name', 'lead_score', 'lead_category']].to_string())
-        
-        # Distribution by category
-        print("\nLead Distribution:")
-        print(scored_df['lead_category'].value_counts())
-        
-        # Save scored leads
-        output_file = "scored_leads_output.xlsx"
-        scored_df.to_excel(output_file, index=False)
-        print(f"\nScored leads saved to: {output_file}")
-        
-    except Exception as e:
-        print(f"\nError in main execution: {e}")
-        import traceback
-        traceback.print_exc()
+    main()

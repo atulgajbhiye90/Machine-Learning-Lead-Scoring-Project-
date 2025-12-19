@@ -1,3 +1,4 @@
+streamlit
 pandas
 numpy
 matplotlib
@@ -6,3 +7,4 @@ scikit-learn
 xgboost
 openpyxl
 requests
+plotly

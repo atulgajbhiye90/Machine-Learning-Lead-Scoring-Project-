@@ -1,5 +1,5 @@
 # ML Project Rental.py
-# Corrected version - Fixed multiple issues
+# Corrected version - Fixed syntax error and multiple issues
 
 import os
 import pandas as pd
@@ -717,13 +717,60 @@ def train_randomforest_model():
     if len(np.unique(y)) == 2 and len(X) >= 20:
         try:
             cv_scores = cross_val_score(pipeline, X, y, cv=min(5, len(X) // 4), scoring="roc_auc")
-        try:
-           df = preprocess_data(df)
-           X_transformed = transformer.transform(df)
-
-
-           lead_probability = model.predict_proba(X)[:, 1]
-           df["lead_score"] = (lead_probability * 100).round(0).astype(int)
-
+            print(f"\nCross-validation ROC AUC scores: {cv_scores}")
+            print(f"Mean CV ROC AUC: {cv_scores.mean():.3f} (+/- {cv_scores.std():.3f})")
         except Exception as e:
-            print("Preprocessing error:", e)
+            print(f"Cross-validation failed: {e}")
+    
+    # Score all leads using the full dataset
+    try:
+        df_scored = df.copy()
+        # Use the original X (before train/test split) for scoring all leads
+        lead_probability = pipeline.predict_proba(X)[:, 1]
+        df_scored.loc[X.index, "lead_score"] = (lead_probability * 100).round(0).astype(int)
+        df_scored["lead_score"] = df_scored["lead_score"].fillna(0).astype(int)
+        df_scored["lead_category"] = df_scored["lead_score"].apply(map_probability_to_category)
+        
+        print("\nLead score distribution:")
+        print(df_scored["lead_category"].value_counts())
+        
+        return pipeline, df_scored, feature_cols
+    except Exception as e:
+        print("Scoring error:", e)
+        return pipeline, df, feature_cols
+
+
+# ============================================
+# 15. Main Execution
+# ============================================
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print("Starting ML Lead Scoring Pipeline")
+    print("=" * 60)
+    
+    try:
+        # Train the model
+        model, scored_df, features = train_randomforest_model()
+        
+        print("\n" + "=" * 60)
+        print("Model Training Complete!")
+        print("=" * 60)
+        
+        # Display top 10 leads
+        print("\nTop 10 Leads by Score:")
+        print(scored_df.nlargest(10, 'lead_score')[['lead_id', 'name', 'lead_score', 'lead_category']].to_string())
+        
+        # Distribution by category
+        print("\nLead Distribution:")
+        print(scored_df['lead_category'].value_counts())
+        
+        # Save scored leads
+        output_file = "scored_leads_output.xlsx"
+        scored_df.to_excel(output_file, index=False)
+        print(f"\nScored leads saved to: {output_file}")
+        
+    except Exception as e:
+        print(f"\nError in main execution: {e}")
+        import traceback
+        traceback.print_exc()
